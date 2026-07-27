@@ -142,18 +142,8 @@ async def vision_ws(websocket: WebSocket) -> None:
                 None, detector.detect, req.frame_b64
             )
 
-            if not detected:
-                await websocket.send_text(
-                    VisionResponse(
-                        session_id=req.session_id,
-                        status="failed",
-                        error="no object detected",
-                    ).model_dump_json()
-                )
-                continue
-
-            # 신뢰도 가장 높은 객체 선택
-            best = max(detected, key=lambda d: d.confidence)
+            # 신뢰도 가장 높은 객체 선택 (없으면 None — Gemini 가 직접 식별)
+            best = max(detected, key=lambda d: d.confidence) if detected else None
 
             # LangGraph 파이프라인 실행
             state = GraphState(

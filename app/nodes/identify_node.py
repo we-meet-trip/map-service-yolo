@@ -1,14 +1,14 @@
 """Gemini Vision 객체 식별 노드.
 
-YOLO 가 탐지한 객체 + 위치 정보를 Gemini Vision 에 보내
+YOLO 레이블에 의존하지 않고 Gemini Vision 이 이미지를 직접 보고
 정확한 이름·카테고리·설명·검색 쿼리를 추출한다.
 
-위치 컨텍스트를 함께 전달해 "건물 + 경복궁 근처" → "경복궁" 처럼
-정확도를 높인다.
+위치 컨텍스트를 함께 전달해 랜드마크·음식·제품 등의 정확도를 높인다.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 
@@ -20,10 +20,9 @@ from app.schemas.vision_schemas import GraphState, IdentifyResult
 
 logger = logging.getLogger(__name__)
 
-_IDENTIFY_PROMPT = """\
-아래 정보를 바탕으로 사진 속 객체를 정확히 식별하고, 사용자의 질문이 있으면 그에 맞춰 답해줘.
 
-탐지된 객체 레이블: {label} (신뢰도: {confidence:.0%})
+_IDENTIFY_PROMPT = """\
+이 사진을 보고 가장 주목할 만한 객체 또는 장소를 정확히 식별해줘.
 {location_line}
 {voice_line}
 
@@ -31,21 +30,21 @@ _IDENTIFY_PROMPT = """\
 {{
   "name": "정확한 이름 (예: 경복궁, 비빔밥, 아이폰15)",
   "category": "landmark | food | product | animal | plant | other 중 하나",
-  "description": "사용자 질문에 답하는 두 세 문장 한국어 설명",
+  "description": "사용자 질문에 답하거나, 질문이 없으면 이 객체에 대한 흥미로운 두 세 문장 한국어 설명",
   "search_query": "검색에 최적화된 한국어 쿼리"
 }}
 """
 
 
 async def identify_node(state: GraphState) -> GraphState:
-    """Gemini Vision 으로 탐지 객체를 식별하는 LangGraph 노드.
+    """Gemini Vision 이 이미지를 직접 분석해 객체를 식별하는 LangGraph 노드.
 
-    state.detected_object 를 읽어 state.identify_result 를 채운다.
+    YOLO detected_object 는 참고용 로그에만 사용하며, 핵심 식별은 Gemini Vision 이 담당.
     location 은 선택값이며 없으면 프롬프트에서 생략한다.
     식별 실패 시 state.error 에 사유를 기록하고 반환.
     """
-    if state.detected_object is None:
-        state.error = "identify_node: detected_object is None"
+    if not state.frame_b64:
+        state.error = "identify_node: frame_b64 is empty"
         return state
 
     settings = get_settings()
@@ -54,7 +53,7 @@ async def identify_node(state: GraphState) -> GraphState:
     location_line = (
         f"사용자 현재 위치: 위도 {state.location.lat}, 경도 {state.location.lng}"
         if state.location
-        else "사용자 현재 위치: 정보 없음"
+        else ""
     )
     voice_line = (
         f"사용자 질문: {state.voice_text}"
@@ -63,15 +62,12 @@ async def identify_node(state: GraphState) -> GraphState:
     )
 
     prompt = _IDENTIFY_PROMPT.format(
-        label=state.detected_object.label,
-        confidence=state.detected_object.confidence,
         location_line=location_line,
         voice_line=voice_line,
     )
 
-    # 프레임 이미지를 인라인으로 첨부
     image_part = genai_types.Part.from_bytes(
-        data=__import__("base64").b64decode(state.frame_b64),
+        data=base64.b64decode(state.frame_b64),
         mime_type="image/jpeg",
     )
 
@@ -92,9 +88,10 @@ async def identify_node(state: GraphState) -> GraphState:
         data = json.loads(raw)
         state.identify_result = IdentifyResult(**data)
         logger.info(
-            "identify_node: name=%s category=%s",
+            "identify_node: name=%s category=%s yolo_hint=%s",
             state.identify_result.name,
             state.identify_result.category,
+            state.detected_object.label if state.detected_object else "none",
         )
     except asyncio.TimeoutError:
         state.error = "identify_node: Gemini timeout"

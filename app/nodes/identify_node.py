@@ -16,6 +16,7 @@ from google import genai
 from google.genai import types as genai_types
 
 from app.agent_settings import get_settings
+from app.nodes.kakao_local import kakao_reverse_geocode
 from app.schemas.vision_schemas import GraphState, IdentifyResult
 
 logger = logging.getLogger(__name__)
@@ -50,11 +51,18 @@ async def identify_node(state: GraphState) -> GraphState:
     settings = get_settings()
     client = genai.Client(api_key=settings.GEMINI_API_KEY.get_secret_value())
 
-    location_line = (
-        f"사용자 현재 위치: 위도 {state.location.lat}, 경도 {state.location.lng}"
-        if state.location
-        else ""
-    )
+    if state.location:
+        address = ""
+        if settings.KAKAO_REST_API_KEY:
+            address = await kakao_reverse_geocode(
+                state.location.lat, state.location.lng, settings.KAKAO_REST_API_KEY
+            )
+        if address:
+            location_line = f"사용자 현재 위치: {address}"
+        else:
+            location_line = f"사용자 현재 위치: 위도 {state.location.lat}, 경도 {state.location.lng}"
+    else:
+        location_line = ""
     voice_line = (
         f"사용자 질문: {state.voice_text}"
         if state.voice_text

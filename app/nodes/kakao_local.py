@@ -1,4 +1,4 @@
-"""Kakao 로컬 API — 키워드 장소 검색."""
+"""Kakao 로컬 API — 키워드 장소 검색 + 역지오코딩."""
 from __future__ import annotations
 
 import re
@@ -6,6 +6,37 @@ import re
 import httpx
 
 _KAKAO_KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
+_KAKAO_COORD2ADDRESS_URL = "https://dapi.kakao.com/v2/local/geo/coord2address.json"
+_KAKAO_COORD2REGIONCODE_URL = "https://dapi.kakao.com/v2/local/geo/coord2regioncode.json"
+
+
+async def kakao_reverse_geocode(lat: float, lng: float, api_key: str) -> str:
+    """위도/경도 → 실제 주소 문자열 반환.
+
+    도로명 주소 우선, 없으면 지번 주소 반환.
+    실패 시 빈 문자열 반환.
+    """
+    headers = {"Authorization": f"KakaoAK {api_key}"}
+    params = {"x": lng, "y": lat}
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            resp = await client.get(_KAKAO_COORD2ADDRESS_URL, params=params, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            docs = data.get("documents", [])
+            if docs:
+                doc = docs[0]
+                road = doc.get("road_address")
+                if road:
+                    building = road.get("building_name", "")
+                    address = road.get("address_name", "")
+                    return f"{address} {building}".strip()
+                jibun = doc.get("address", {})
+                return jibun.get("address_name", "")
+        except Exception:
+            pass
+    return ""
 
 # 장소 유형 키워드 (우선순위 높은 순)
 _PLACE_TYPES = [

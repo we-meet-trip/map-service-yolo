@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 _IDENTIFY_PROMPT = """\
 이 사진을 보고 가장 주목할 만한 객체 또는 장소를 정확히 식별해줘.
+{yolo_line}
 {location_line}
 {voice_line}
 
@@ -63,6 +64,12 @@ async def identify_node(state: GraphState) -> GraphState:
             location_line = f"사용자 현재 위치: 위도 {state.location.lat}, 경도 {state.location.lng}"
     else:
         location_line = ""
+
+    if state.detected_object:
+        yolo_line = f"YOLO 탐지 힌트: {state.detected_object.label} (신뢰도 {state.detected_object.confidence:.0%}) — 참고용이며 최종 판단은 이미지를 직접 보고 해줘."
+    else:
+        yolo_line = ""
+
     voice_line = (
         f"사용자 질문: {state.voice_text}"
         if state.voice_text
@@ -70,6 +77,7 @@ async def identify_node(state: GraphState) -> GraphState:
     )
 
     prompt = _IDENTIFY_PROMPT.format(
+        yolo_line=yolo_line,
         location_line=location_line,
         voice_line=voice_line,
     )

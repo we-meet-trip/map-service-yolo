@@ -64,8 +64,9 @@ async def vision_ws(websocket: WebSocket) -> None:
             if not req.voice_triggered and req.voice_text:
                 settings = get_settings()
                 client = genai.Client(api_key=settings.GEMINI_API_KEY.get_secret_value())
+                answer: str | None = None
 
-                # 장소 검색 의도 감지 → Kakao 로컬 API
+                # 장소 검색 의도 감지 → Kakao 로컬 API 우선 시도
                 if is_local_query(req.voice_text) and settings.KAKAO_REST_API_KEY:
                     lat = req.location.lat if req.location else None
                     lng = req.location.lng if req.location else None
@@ -89,10 +90,9 @@ async def vision_ws(websocket: WebSocket) -> None:
                             phone = f"  ☎ {p['phone']}" if p["phone"] else ""
                             lines.append(f"{i}. {p['name']}{dist}\n   {p['address']}{phone}")
                         answer = "\n".join(lines)
-                    else:
-                        answer = f"'{keyword}' 검색 결과가 없어요. 다른 키워드로 말씀해 주세요."
-                else:
-                    # 일반 대화 → Gemini
+
+                # Kakao 결과 없거나 장소 검색이 아닌 경우 → Gemini
+                if answer is None:
                     prompt_parts = []
                     if req.prior_context:
                         prompt_parts.append(f"[이전 인식 정보]\n{req.prior_context}")

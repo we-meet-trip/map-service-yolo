@@ -58,9 +58,15 @@ _STOPWORDS = {
 
 
 def is_local_query(text: str) -> bool:
-    """텍스트가 장소 검색 의도인지 판단."""
-    location_triggers = {"근처", "주변", "가까운", "어디", "맛집", "찾아"} | set(_PLACE_TYPES)
-    return any(kw in text for kw in location_triggers)
+    """텍스트가 장소 검색 의도인지 판단.
+
+    위치 트리거("근처", "주변" 등) AND 장소 유형("카페", "식당" 등)이
+    동시에 있어야 장소 검색으로 판단. 어느 하나만 있으면 일반 대화로 처리.
+    """
+    location_triggers = {"근처", "주변", "가까운", "맛집", "찾아줘", "찾아주세요", "어디있어", "어디 있어"}
+    has_trigger = any(kw in text for kw in location_triggers)
+    has_place_type = any(pt in text for pt in _PLACE_TYPES)
+    return has_trigger and has_place_type
 
 
 def extract_search_keyword(text: str) -> str:

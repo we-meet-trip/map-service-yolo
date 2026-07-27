@@ -1,0 +1,44 @@
+# yolo-vision-agent 런타임 의존성.
+
+# fastapi
+#   - app/main.py FastAPI 인스턴스 및 라우터 정의.
+fastapi==0.136.1
+# uvicorn[standard]
+#   - ASGI 서버.
+uvicorn[standard]==0.47.0
+
+# pydantic-settings
+#   - app/agent_settings.py AgentSettings 환경 변수 로딩.
+pydantic-settings>=2.14.1,<3.0
+
+# websockets
+#   - app/api/ws.py 폰 카메라 스트림 수신용 WebSocket.
+websockets>=13.0,<14.0
+
+# ultralytics
+#   - app/vision/detector.py YOLO 추론.
+ultralytics>=8.0.0,<9.0.0
+
+# opencv-python-headless
+#   - app/vision/detector.py 프레임 디코딩/전처리.
+#   - headless: GUI 없는 서버 환경용.
+opencv-python-headless>=4.10.0,<5.0
+
+# numpy
+#   - 프레임 배열 처리.
+numpy>=1.26.0,<3.0
+
+# langgraph
+#   - app/graph/vision_graph.py StateGraph 빌더.
+langgraph==1.2.0
+# langchain-core
+#   - langgraph 내부 의존성.
+langchain-core==1.4.0
+
+# google-genai
+#   - app/nodes/identify_node.py Gemini Vision 객체 식별.
+google-genai==2.3.0
+
+# httpx[http2]
+#   - app/nodes/search_node.py 외부 검색 API 호출.
+httpx[http2]==0.28.1

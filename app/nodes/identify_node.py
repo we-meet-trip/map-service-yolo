@@ -12,10 +12,10 @@ import base64
 import json
 import logging
 
-from google import genai
 from google.genai import types as genai_types
 
 from app.agent_settings import get_settings
+from app.gemini_client import get_gemini_client
 from app.nodes.kakao_local import kakao_reverse_geocode
 from app.schemas.vision_schemas import GraphState, IdentifyResult
 
@@ -50,7 +50,7 @@ async def identify_node(state: GraphState) -> GraphState:
         return state
 
     settings = get_settings()
-    client = genai.Client(api_key=settings.GEMINI_API_KEY.get_secret_value())
+    client = get_gemini_client()
 
     if state.location:
         address = ""

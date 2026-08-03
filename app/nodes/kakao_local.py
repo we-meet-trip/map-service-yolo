@@ -119,7 +119,8 @@ async def kakao_local_search(
         [{"name": ..., "address": ..., "phone": ..., "category": ..., "distance": ...}]
     """
     params: dict = {"query": query, "size": size}
-    if lat and lng:
+    # 좌표 0.0 은 유효한 값이므로 truthiness 가 아니라 None 여부로 판단한다.
+    if lat is not None and lng is not None:
         params["y"] = lat
         params["x"] = lng
         params["radius"] = radius

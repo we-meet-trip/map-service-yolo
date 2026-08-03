@@ -6,6 +6,7 @@ lifespan:
 
 엔드포인트:
   GET  /health          헬스 체크.
+  GET  /metrics         Prometheus 스크레이프용 지표.
   WS   /ws/vision       음성 트리거 프레임 수신 + 실시간 객체 인식.
 """
 from __future__ import annotations
@@ -15,6 +16,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI, WebSocket
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.agent_settings import get_settings
 from app.api.ws import vision_ws
@@ -61,6 +63,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# /metrics 노출 — 스택의 다른 FastAPI 서비스와 동일한 스크레이프 규약.
+Instrumentator().instrument(app).expose(app, include_in_schema=False)
 
 
 @app.get("/health")

@@ -8,10 +8,12 @@
 
 음성 트리거 방식:
   1) VisionRequest 파싱.
-  2) voice_triggered=false 이면 무시.
-  3) voice_triggered=true 이면 YOLO 탐지 즉시 실행.
-  4) 탐지 객체가 있으면 LangGraph 파이프라인 실행.
-  5) 결과를 VisionResponse JSON 으로 반환.
+  2) voice_triggered=false 이고 voice_text 만 있으면 텍스트 대화로 처리.
+  3) voice_triggered=false 이고 voice_text 도 없으면 무시.
+  4) voice_triggered=true 이면 YOLO 탐지를 즉시 실행한다.
+  5) LangGraph 파이프라인(identify → search)을 실행한다.
+     탐지 객체가 없어도 Gemini 가 이미지를 직접 보고 식별하므로 진행한다.
+  6) 결과를 VisionResponse JSON 으로 반환.
 """
 from __future__ import annotations
 
@@ -20,9 +22,9 @@ import json
 import logging
 
 from fastapi import WebSocket, WebSocketDisconnect
-from google import genai
 
 from app.agent_settings import get_settings
+from app.gemini_client import get_gemini_client
 from app.nodes.kakao_local import extract_search_keyword, is_local_query, kakao_local_search
 from app.schemas.vision_schemas import (
     GraphState,
@@ -46,10 +48,28 @@ async def vision_ws(websocket: WebSocket) -> None:
     graph = app.state.graph
     timeout = app.state.job_timeout_seconds
 
+    # 이 엔드포인트는 자체 인증이 없다. 관문이 막는 것은 접속 시도 횟수뿐이라,
+    # 한 번 맺은 연결로 계속 밀어 넣으면 외부 모델 호출 한도를 혼자 소진한다.
+    # 그 한도는 일정 생성과 공유하므로 여기서 새면 추천까지 멈춘다.
+    max_jobs = get_settings().WS_MAX_JOBS_PER_CONNECTION
+    jobs = 0
+
     logger.info("vision_ws: client connected")
     try:
         while True:
             raw = await websocket.receive_text()
+            if jobs >= max_jobs:
+                logger.warning("vision_ws: 연결당 처리 상한 도달 max=%d", max_jobs)
+                await websocket.send_text(
+                    VisionResponse(
+                        session_id="unknown",
+                        status="failed",
+                        error="이 연결에서 처리할 수 있는 횟수를 넘었어요. 다시 연결해주세요.",
+                    ).model_dump_json()
+                )
+                await websocket.close()
+                return
+            jobs += 1
             try:
                 req = VisionRequest(**json.loads(raw))
             except Exception as e:
@@ -63,7 +83,7 @@ async def vision_ws(websocket: WebSocket) -> None:
             # 텍스트 전용 채팅 모드 (이미지 없이 voice_text만 있는 경우)
             if not req.voice_triggered and req.voice_text:
                 settings = get_settings()
-                client = genai.Client(api_key=settings.GEMINI_API_KEY.get_secret_value())
+                client = get_gemini_client()
                 answer: str | None = None
 
                 # 장소 검색 의도 감지 → Kakao 로컬 API 우선 시도
@@ -168,7 +188,8 @@ async def vision_ws(websocket: WebSocket) -> None:
                 detected_object=result.detected_object,
                 identify_result=result.identify_result,
                 search_results=result.search_results,
-                status="failed" if result.error else "done",
+                # 보여줄 것이 있으면 성공이다. 식별을 못 했을 때만 실패로 알린다.
+                status="done" if result.identify_result else "failed",
                 error=result.error,
             )
             await websocket.send_text(response.model_dump_json())

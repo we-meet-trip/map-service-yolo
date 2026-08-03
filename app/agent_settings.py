@@ -23,13 +23,16 @@ class AgentSettings(BaseSettings):
       GEMINI_TIMEOUT_SECONDS: Gemini 호출 1건의 타임아웃(초).
 
     YOLO 관련:
-      YOLO_MODEL_PATH: .pt 모델 파일 경로. models/ 디렉토리 기준.
+      YOLO_MODEL_PATH: .pt 모델 파일 경로. 작업 디렉토리 기준 상대 경로.
       YOLO_CONFIDENCE: 탐지 신뢰도 임계값(0.0~1.0).
-      YOLO_STABLE_FRAMES: 동일 객체가 연속 N프레임 탐지될 때 에이전트 호출.
 
     서비스 관련:
       JOB_TIMEOUT_SECONDS: 에이전트 1회 실행 한도(초).
-      SHUTDOWN_GRACE_SECONDS: lifespan 종료 시 대기 한도(초).
+        식별 + 검색을 모두 담아야 하므로 GEMINI_TIMEOUT_SECONDS 보다 커야 한다.
+        작으면 식별을 마치고도 검색 도중 잘려 결과가 통째로 버려진다.
+      WS_MAX_JOBS_PER_CONNECTION: 연결 하나가 돌릴 수 있는 인식 횟수 상한.
+        인식 1건마다 외부 모델을 부르므로, 상한이 없으면 연결 하나로 호출
+        한도를 소진시켜 같은 키를 쓰는 다른 기능까지 멈춘다.
     """
 
     model_config = SettingsConfigDict(
@@ -37,16 +40,15 @@ class AgentSettings(BaseSettings):
     )
 
     GEMINI_API_KEY: SecretStr = SecretStr("")
-    GEMINI_MODEL: str = "gemini-2.0-flash"
-    GEMINI_TIMEOUT_SECONDS: float = 30.0
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_TIMEOUT_SECONDS: float = 25.0
     KAKAO_REST_API_KEY: str = ""
 
     YOLO_MODEL_PATH: str = "models/yolo11n.pt"
     YOLO_CONFIDENCE: float = 0.5
-    YOLO_STABLE_FRAMES: int = 5
 
-    JOB_TIMEOUT_SECONDS: float = 30.0
-    SHUTDOWN_GRACE_SECONDS: float = 40.0
+    JOB_TIMEOUT_SECONDS: float = 45.0
+    WS_MAX_JOBS_PER_CONNECTION: int = 60
 
 
 _settings: AgentSettings | None = None

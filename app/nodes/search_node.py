@@ -9,6 +9,7 @@ SearchResult 리스트를 반환한다.
 from __future__ import annotations
 
 import logging
+import re
 import urllib.parse
 
 import httpx
@@ -25,7 +26,7 @@ async def search_node(state: GraphState) -> GraphState:
     """검색 쿼리로 Wikipedia 를 조회해 state.search_results 를 채우는 노드.
 
     state.identify_result 가 없거나 state.error 가 있으면 스킵.
-    검색 실패 시 state.error 에 사유를 기록.
+    검색 실패는 빈 목록으로 넘긴다 — 곁들이는 설명이라 식별 결과까지 버리지 않는다.
     """
     if state.error or state.identify_result is None:
         return state
@@ -54,7 +55,6 @@ async def search_node(state: GraphState) -> GraphState:
                 title = hit.get("title", "")
                 snippet = hit.get("snippet", "")
                 # HTML 태그 제거
-                import re
                 snippet = re.sub(r"<[^>]+>", "", snippet)
                 encoded = urllib.parse.quote(title.replace(" ", "_"))
                 url = f"https://ko.wikipedia.org/wiki/{encoded}"
@@ -73,7 +73,12 @@ async def search_node(state: GraphState) -> GraphState:
             query, len(results), state.session_id,
         )
     except Exception as e:
-        state.error = f"search_node: {e}"
-        logger.exception("search_node: error session=%s", state.session_id)
+        # 검색이 실패해도 식별 결과는 살린다. 여기서 사유를 남기면
+        # 응답 전체가 실패로 나가 사진 속 대상을 알아내고도 아무것도 못 보여준다.
+        state.search_results = []
+        logger.warning(
+            "search_node: 검색 실패 session=%s reason=%s",
+            state.session_id, e,
+        )
 
     return state

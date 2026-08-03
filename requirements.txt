@@ -42,3 +42,7 @@ google-genai==2.3.0
 # httpx[http2]
 #   - app/nodes/search_node.py 외부 검색 API 호출.
 httpx[http2]==0.28.1
+
+# prometheus-fastapi-instrumentator
+#   - app/main.py /metrics 노출.
+prometheus-fastapi-instrumentator>=7.0.0,<8.0

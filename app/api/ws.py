@@ -14,6 +14,9 @@
   5) LangGraph 파이프라인(identify → search)을 실행한다.
      탐지 객체가 없어도 Gemini 가 이미지를 직접 보고 식별하므로 진행한다.
   6) 결과를 VisionResponse JSON 으로 반환.
+
+연결당 처리 상한은 2)와 4)에서만, 외부를 부르기 직전에 한 칸씩 쓴다.
+1)에서 형식이 깨져 되돌려 보내는 요청과 3)의 무시되는 프레임은 상한을 쓰지 않는다.
 """
 from __future__ import annotations
 
@@ -54,22 +57,36 @@ async def vision_ws(websocket: WebSocket) -> None:
     max_jobs = get_settings().WS_MAX_JOBS_PER_CONNECTION
     jobs = 0
 
+    async def consume_quota(session_id: str) -> bool:
+        """외부를 부르기 직전에 상한 한 칸을 쓴다. 남아 있지 않으면 알리고 닫는다.
+
+        세는 대상은 실제로 외부를 부르는 처리다. 읽어 들인 프레임 수를 세면,
+        형식이 깨진 요청이나 아무 일도 하지 않고 넘기는 프레임까지 상한을 깎아
+        외부를 한 번도 부르지 않은 연결이 끊긴다. 남용을 막자는 상한이 정상
+        사용자를 먼저 끊는 셈이라, 세는 자리를 호출 직전으로 옮겼다.
+        """
+        nonlocal jobs
+        if jobs >= max_jobs:
+            logger.warning(
+                "vision_ws: 연결당 처리 상한 도달 max=%d session=%s",
+                max_jobs, session_id,
+            )
+            await websocket.send_text(
+                VisionResponse(
+                    session_id=session_id,
+                    status="failed",
+                    error="이 연결에서 처리할 수 있는 횟수를 넘었어요. 다시 연결해주세요.",
+                ).model_dump_json()
+            )
+            await websocket.close()
+            return False
+        jobs += 1
+        return True
+
     logger.info("vision_ws: client connected")
     try:
         while True:
             raw = await websocket.receive_text()
-            if jobs >= max_jobs:
-                logger.warning("vision_ws: 연결당 처리 상한 도달 max=%d", max_jobs)
-                await websocket.send_text(
-                    VisionResponse(
-                        session_id="unknown",
-                        status="failed",
-                        error="이 연결에서 처리할 수 있는 횟수를 넘었어요. 다시 연결해주세요.",
-                    ).model_dump_json()
-                )
-                await websocket.close()
-                return
-            jobs += 1
             try:
                 req = VisionRequest(**json.loads(raw))
             except Exception as e:
@@ -82,6 +99,8 @@ async def vision_ws(websocket: WebSocket) -> None:
 
             # 텍스트 전용 채팅 모드 (이미지 없이 voice_text만 있는 경우)
             if not req.voice_triggered and req.voice_text:
+                if not await consume_quota(req.session_id):
+                    return
                 settings = get_settings()
                 client = get_gemini_client()
                 answer: str | None = None
@@ -153,6 +172,9 @@ async def vision_ws(websocket: WebSocket) -> None:
             # 음성 트리거가 아니면 무시
             if not req.voice_triggered:
                 continue
+
+            if not await consume_quota(req.session_id):
+                return
 
             logger.info("vision_ws: voice triggered session=%s", req.session_id)
 

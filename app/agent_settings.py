@@ -33,6 +33,11 @@ class AgentSettings(BaseSettings):
       WS_MAX_JOBS_PER_CONNECTION: 연결 하나가 돌릴 수 있는 인식 횟수 상한.
         인식 1건마다 외부 모델을 부르므로, 상한이 없으면 연결 하나로 호출
         한도를 소진시켜 같은 키를 쓰는 다른 기능까지 멈춘다.
+
+    관측(로깅):
+      LOG_LEVEL: 루트 로거 레벨. uvicorn 은 자기 로거만 구성하고 루트 로거에는
+        핸들러를 붙이지 않는다. app/main.py 의 _configure_logging 이 부팅 시
+        루트 핸들러가 비어 있을 때만 stdout 핸들러를 붙여 app.* 로그를 살린다.
     """
 
     model_config = SettingsConfigDict(
@@ -49,6 +54,8 @@ class AgentSettings(BaseSettings):
 
     JOB_TIMEOUT_SECONDS: float = 45.0
     WS_MAX_JOBS_PER_CONNECTION: int = 60
+
+    LOG_LEVEL: str = "INFO"
 
 
 _settings: AgentSettings | None = None

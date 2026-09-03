@@ -61,7 +61,12 @@ async def identify_node(state: GraphState) -> GraphState:
         if address:
             location_line = f"사용자 현재 위치: {address}"
         else:
-            location_line = f"사용자 현재 위치: 위도 {state.location.lat}, 경도 {state.location.lng}"
+            # 원값은 기기 위치를 그대로 드러내므로 외부 프롬프트에는
+            # 소수 3자리(약 100m 정밀도)로 낮춰 싣는다. 식별에는 충분하다.
+            location_line = (
+                f"사용자 현재 위치: 위도 {state.location.lat:.3f}, "
+                f"경도 {state.location.lng:.3f}"
+            )
     else:
         location_line = ""
 

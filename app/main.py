@@ -21,6 +21,9 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.agent_settings import get_settings
 from app.api.ws import vision_ws
+
+# import 만으로 uvicorn.access·httpx 로거에 좌표 가림 필터가 걸린다.
+from app.log_redaction import CoordinateRedactingFilter
 from app.graph.vision_graph import build_graph
 from app.vision.detector import YoloDetector
 
@@ -35,17 +38,22 @@ def _configure_logging(level: str) -> None:
     전량 유실된다 — 어떤 연결이 무엇을 인식했고 무엇이 실패했는지가 보이지 않는다.
     경고 이상은 파이썬의 최후 수단 핸들러로 새어 나가지만 시각도 로거명도 없다.
 
+    좌표 가림 필터를 이 핸들러에도 건다. 외부 요청 로거에만 걸어 두면
+    애플리케이션 로그로 나가는 좌표는 그대로 남아 가림이 반쪽이 된다.
+
     이미 핸들러가 있으면(uvicorn `--log-config`, 테스트 하니스) 그 설정을 존중하고
     아무것도 하지 않는다 — 핸들러를 덧붙이면 같은 로그가 두 줄씩 출력된다.
     """
     root = logging.getLogger()
     if root.handlers:
         return
-    logging.basicConfig(
-        level=level.upper(),
-        stream=sys.stdout,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
     )
+    handler.addFilter(CoordinateRedactingFilter())
+    root.addHandler(handler)
+    root.setLevel(level.upper())
 
 
 @asynccontextmanager

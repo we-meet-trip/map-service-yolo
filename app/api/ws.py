@@ -110,7 +110,8 @@ async def vision_ws(websocket: WebSocket) -> None:
                     lat = req.location.lat if req.location else None
                     lng = req.location.lng if req.location else None
                     keyword = extract_search_keyword(req.voice_text)
-                    logger.info("kakao_local_search keyword=%s lat=%s lng=%s", keyword, lat, lng)
+                    # 좌표 값은 기기 위치라 로그에 남기지 않는다. 있었는지만 남긴다.
+                    logger.info("kakao_local_search keyword=%s has_loc=%s", keyword, lat is not None)
                     try:
                         places = await kakao_local_search(
                             query=keyword,

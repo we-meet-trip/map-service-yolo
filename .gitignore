@@ -1,4 +1,8 @@
 .env
+# 이름을 덧붙인 사본도 같이 막는다. 위 규칙은 정확히 일치할 때만 걸려서
+# .env.prod 같은 파일은 그대로 추적 대상으로 올라온다.
+.env.*
+!.env.example
 .DS_Store
 __pycache__/
 *.pyc

@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+FRAME_MAX_BYTES = 2 * 1024 * 1024
+FRAME_MAX_PIXELS = 2048 * 2048
+FRAME_MAX_BASE64 = 4 * ((FRAME_MAX_BYTES + 2) // 3)
+WS_MAX_BYTES = 4 * 1024 * 1024
 
 
 class Location(BaseModel):
@@ -13,9 +18,10 @@ class Location(BaseModel):
     lng: 경도.
     accuracy_meters: 위치 정확도(미터). 없을 수 있음.
     """
-    lat: float
-    lng: float
-    accuracy_meters: Optional[float] = None
+    model_config = ConfigDict(allow_inf_nan=False)
+    lat: float = Field(ge=33, le=43)
+    lng: float = Field(ge=124, le=132)
+    accuracy_meters: Optional[float] = Field(default=None, ge=0, le=100000)
 
 
 class DetectedObject(BaseModel):
@@ -38,13 +44,25 @@ class VisionRequest(BaseModel):
     session_id: 클라이언트 세션 식별자.
     voice_triggered: 음성 발화 시작 트리거 여부.
     """
-    frame_b64: str
+    frame_b64: str = Field(default="", max_length=FRAME_MAX_BASE64)
     location: Optional[Location] = None
-    session_id: str
+    session_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    request_id: Optional[str] = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     voice_triggered: bool = False
-    voice_text: Optional[str] = None
-    prior_context: Optional[str] = None
-    conversation_history: list[dict] = []
+    voice_text: Optional[str] = Field(default=None, max_length=2000)
+    prior_context: Optional[str] = Field(default=None, max_length=2000)
+    conversation_history: list[dict] = Field(default_factory=list, max_length=8)
+
+    @field_validator("conversation_history")
+    @classmethod
+    def validate_history(cls, messages):
+        for message in messages:
+            if (set(message) != {"role", "content"} or not isinstance(message["role"], str)
+                    or message["role"] not in {"user", "assistant"}):
+                raise ValueError("invalid conversation role")
+            if not isinstance(message["content"], str) or len(message["content"]) > 2000:
+                raise ValueError("invalid conversation content")
+        return messages
 
 
 class IdentifyResult(BaseModel):
@@ -86,6 +104,7 @@ class VisionResponse(BaseModel):
     error: 실패 시 사유.
     """
     session_id: str
+    request_id: Optional[str] = None
     detected_object: Optional[DetectedObject] = None
     identify_result: Optional[IdentifyResult] = None
     search_results: List[SearchResult] = Field(default_factory=list)

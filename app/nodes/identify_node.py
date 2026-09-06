@@ -109,8 +109,7 @@ async def identify_node(state: GraphState) -> GraphState:
         data = json.loads(raw)
         state.identify_result = IdentifyResult(**data)
         logger.info(
-            "identify_node: name=%s category=%s yolo_hint=%s",
-            state.identify_result.name,
+            "identify_node: category=%s yolo_hint=%s",
             state.identify_result.category,
             state.detected_object.label if state.detected_object else "none",
         )
@@ -119,6 +118,6 @@ async def identify_node(state: GraphState) -> GraphState:
         logger.warning("identify_node: timeout session=%s", state.session_id)
     except Exception as e:
         state.error = f"identify_node: {e}"
-        logger.exception("identify_node: error session=%s", state.session_id)
+        logger.warning("identify_node: error type=%s", type(e).__name__)
 
     return state

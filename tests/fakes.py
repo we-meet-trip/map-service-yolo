@@ -8,6 +8,7 @@ import json
 from types import SimpleNamespace
 
 from fastapi import WebSocketDisconnect
+from app.vision.runtime import VisionRuntime
 
 
 class FakeWebSocket:
@@ -16,15 +17,18 @@ class FakeWebSocket:
     준비한 프레임이 떨어지면 WebSocketDisconnect 를 던져 실제 종료를 흉내 낸다.
     """
 
-    def __init__(self, app, incoming: list[str]):
+    def __init__(self, app, incoming: list[str], protocols=None):
         self.app = app
         self._incoming = list(incoming)
         self.sent: list[str] = []
         self.closed = False
         self.accepted = False
+        self.scope = {"subprotocols": protocols if protocols is not None else ["map.vision.v1", "bearer.test.jwt.signature"]}
+        self.close_code = None
 
-    async def accept(self) -> None:
+    async def accept(self, subprotocol=None) -> None:
         self.accepted = True
+        self.subprotocol = subprotocol
 
     async def receive_text(self) -> str:
         if self.closed or not self._incoming:
@@ -34,8 +38,9 @@ class FakeWebSocket:
     async def send_text(self, text: str) -> None:
         self.sent.append(text)
 
-    async def close(self) -> None:
+    async def close(self, code=1000) -> None:
         self.closed = True
+        self.close_code = code
 
     # ---- 검증 도우미 ----
 
@@ -77,8 +82,35 @@ def fake_app(detector=None, graph=None, timeout: float = 5.0):
             detector=detector or FakeDetector(),
             graph=graph or FakeGraph(),
             job_timeout_seconds=timeout,
+            vision_permit=FakePermit(),
+            vision_runtime=VisionRuntime(2),
         )
     )
+
+
+class FakePermit:
+    def __init__(self, limit=60):
+        self.used = 0
+        self.limit = limit
+        self.calls = []
+
+    async def check(self, token, *, consume):
+        from app.api.permit import PermitError
+        self.calls.append(consume)
+        if consume:
+            if self.used >= self.limit:
+                raise PermitError(429)
+            self.used += 1
+        return SimpleNamespace(user_id=1, remaining=self.limit-self.used)
+
+
+def jpeg_frame():
+    import base64
+    from io import BytesIO
+    from PIL import Image
+    buffer = BytesIO()
+    Image.new("RGB", (2, 2)).save(buffer, format="JPEG")
+    return base64.b64encode(buffer.getvalue()).decode()
 
 
 class FakeGeminiClient:

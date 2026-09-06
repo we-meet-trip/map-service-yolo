@@ -82,7 +82,6 @@ def test_graph_reaches_search_even_when_identify_failed(monkeypatch):
 
 def test_detector_returns_empty_on_broken_frame():
     """디코딩이 실패해도 예외를 올리지 않는다 — 연결 하나가 통째로 끊긴다."""
-    pytest.importorskip("ultralytics", reason="런타임 이미지에만 설치된다")
     from app.vision.detector import YoloDetector
 
     detector = YoloDetector.__new__(YoloDetector)

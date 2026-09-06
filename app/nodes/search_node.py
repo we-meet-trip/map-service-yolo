@@ -69,8 +69,7 @@ async def search_node(state: GraphState) -> GraphState:
 
         state.search_results = results
         logger.info(
-            "search_node: query=%s results=%d session=%s",
-            query, len(results), state.session_id,
+            "search_node: results=%d", len(results),
         )
     except Exception as e:
         # 검색이 실패해도 식별 결과는 살린다. 여기서 사유를 남기면

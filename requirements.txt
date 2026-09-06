@@ -28,6 +28,9 @@ opencv-python-headless>=4.10.0,<5.0
 #   - 프레임 배열 처리.
 numpy>=1.26.0,<3.0
 
+# 프레임을 추론/외부 호출 전에 JPEG 형식·픽셀 상한으로 검사한다.
+Pillow>=10.0,<13.0
+
 # langgraph
 #   - app/graph/vision_graph.py StateGraph 빌더.
 langgraph==1.2.0

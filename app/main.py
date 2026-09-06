@@ -21,6 +21,8 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.agent_settings import get_settings
 from app.api.ws import vision_ws
+from app.api.permit import PermitClient
+from app.vision.runtime import VisionRuntime
 
 # import 만으로 uvicorn.access·httpx 로거에 좌표 가림 필터가 걸린다.
 from app.log_redaction import CoordinateRedactingFilter
@@ -76,19 +78,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if not settings.GEMINI_API_KEY.get_secret_value():
         raise RuntimeError("GEMINI_API_KEY is required")
 
-    app.state.detector = YoloDetector(
-        model_path=settings.YOLO_MODEL_PATH,
-        confidence=settings.YOLO_CONFIDENCE,
+    app.state.vision_permit = PermitClient(
+        settings.USER_SERVICE_BASE_URL, settings.VISION_INTERNAL_TOKEN.get_secret_value(),
+        settings.VISION_PERMIT_TIMEOUT_SECONDS,
     )
-    app.state.graph = build_graph()
-    app.state.job_timeout_seconds = settings.JOB_TIMEOUT_SECONDS
+    app.state.vision_runtime = VisionRuntime(settings.VISION_MAX_CONCURRENT_JOBS)
 
-    logger.info(
-        "yolo-vision-agent: initialized model=%s",
-        settings.YOLO_MODEL_PATH,
-    )
-    yield
-    logger.info("yolo-vision-agent: shutdown")
+    try:
+        app.state.detector = YoloDetector(
+            model_path=settings.YOLO_MODEL_PATH,
+            confidence=settings.YOLO_CONFIDENCE,
+        )
+        app.state.graph = build_graph()
+        app.state.job_timeout_seconds = settings.JOB_TIMEOUT_SECONDS
+
+        logger.info(
+            "yolo-vision-agent: initialized model=%s",
+            settings.YOLO_MODEL_PATH,
+        )
+        yield
+    finally:
+        app.state.vision_runtime.close()
+        await app.state.vision_permit.aclose()
+        logger.info("yolo-vision-agent: shutdown")
 
 
 app = FastAPI(

@@ -24,6 +24,7 @@ from tests.fakes import (
     FakeGraph,
     FakeWebSocket,
     fake_app,
+    jpeg_frame,
 )
 
 
@@ -109,7 +110,7 @@ def test_image_recognition_consumes_quota(limit_two, stub_gemini):
     app = fake_app(detector=detector, graph=graph)
     socket = FakeWebSocket(
         app,
-        [frame(voice_triggered=True, frame_b64="ZmFrZQ==") for _ in range(5)],
+        [frame(voice_triggered=True, frame_b64=jpeg_frame()) for _ in range(5)],
     )
 
     run(vision_ws(socket))

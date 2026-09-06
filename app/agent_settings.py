@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -54,6 +54,12 @@ class AgentSettings(BaseSettings):
 
     JOB_TIMEOUT_SECONDS: float = 45.0
     WS_MAX_JOBS_PER_CONNECTION: int = 60
+    USER_SERVICE_BASE_URL: str = "http://user:8080"
+    VISION_INTERNAL_TOKEN: SecretStr = SecretStr("")
+    VISION_PERMIT_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0, le=30)
+    VISION_MAX_CONCURRENT_JOBS: int = Field(default=2, ge=1, le=8)
+    WS_IDLE_TIMEOUT_SECONDS: float = Field(default=120.0, gt=0)
+    WS_MAX_MESSAGES_PER_CONNECTION: int = Field(default=240, ge=1)
 
     LOG_LEVEL: str = "INFO"
 

@@ -11,11 +11,8 @@ from __future__ import annotations
 import base64
 import logging
 
-import cv2
-import numpy as np
-from ultralytics import YOLO
-
 from app.schemas.vision_schemas import DetectedObject
+from app.vision.frame import validate_frame
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +27,7 @@ class YoloDetector:
     """
 
     def __init__(self, model_path: str, confidence: float) -> None:
+        from ultralytics import YOLO
         self._model = YOLO(model_path)
         self._confidence = confidence
         logger.info("YoloDetector loaded model=%s conf=%.2f", model_path, confidence)
@@ -41,7 +39,10 @@ class YoloDetector:
         프레임 디코딩 실패 시 빈 리스트 반환.
         """
         try:
-            img_bytes = base64.b64decode(frame_b64)
+            validate_frame(frame_b64)
+            import cv2
+            import numpy as np
+            img_bytes = base64.b64decode(frame_b64, validate=True)
             arr = np.frombuffer(img_bytes, dtype=np.uint8)
             frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if frame is None:

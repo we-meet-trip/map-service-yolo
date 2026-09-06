@@ -28,11 +28,7 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu torch torchvisi
 # ─── runtime stage ───────────────────────────────────────────────
 FROM python:${PYTHON_VERSION}-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-# ultralytics 가 opencv-python(비 headless)을 전이 의존으로 끌고 올 수 있어
-# 런타임에도 OpenCV 의 네이티브 의존 라이브러리를 둔다.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
- && rm -rf /var/lib/apt/lists/*
+# Official headless Ultralytics needs no GUI/GLib/XML runtime packages.
 # 권한 최소화를 위해 비루트 사용자 app(uid 10001) 생성.
 # ultralytics 는 설정 파일을 홈의 .config 아래 두는데, 그 디렉터리가 없으면
 # 홈 전체를 쓰기 불가로 보고 /tmp 로 물러난다(기동 때마다 경고 + 설정 재생성).
@@ -52,19 +48,23 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.t
 #   - 기동 시 네트워크와 쓰기 권한이 필요 없어 오프라인·비루트에서도 결정적으로 뜬다.
 #   - ultralytics 의 이름 기반 자동 다운로드는 경로 접두사가 붙으면 동작이 달라지므로
 #     릴리스 태그로 고정한 URL 을 표준 라이브러리로 직접 받는다(이미지에 curl 불요).
-#   - 크기 검증으로 잘린 다운로드를 빌드 단계에서 걸러낸다.
-#   - 소스 복사보다 먼저 실행해 코드 수정 시에도 이 레이어 캐시가 유지되게 한다.
-# 무결성을 더 강하게 고정하려면 최초 빌드 후 sha256 을 구해
-#   ADD --checksum=sha256:<hash> ${YOLO_MODEL_URL} /app/models/yolo11n.pt
-# 로 교체할 수 있다.
-ARG YOLO_MODEL_URL=https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt
-RUN python -c "import os, urllib.request; os.makedirs('/app/models', exist_ok=True); urllib.request.urlretrieve('${YOLO_MODEL_URL}', '/app/models/yolo11n.pt')" \
- && test "$(stat -c%s /app/models/yolo11n.pt)" -gt 1000000
+#   - Official v8.3.0 asset, retrieved and SHA256 verified 2026-09-07.
+#     The release API supplies no digest; pin the exact 5,613,764 retrieved bytes.
+ADD --checksum=sha256:0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1 https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt /app/models/yolo11n.pt
+RUN chmod 644 /app/models/yolo11n.pt
 
+# Immutable serving images do not invoke Perl or account-management tools.
+# Remove the installed package (including its dpkg record), never just scanner metadata.
+# This runs only after all apt/user creation steps; do not run it on a serving host.
+RUN apt-get purge -y --allow-remove-essential perl-base \
+ && find /usr/bin /usr/sbin -xdev -type f -perm /6000 -exec chmod a-s {} + \
+ && test ! -e /usr/bin/perl \
+ && test -z "$(find /usr/bin /usr/sbin -xdev -type f -perm /6000 -print -quit)"
 # 애플리케이션 소스를 app 사용자 소유로 복사.
 COPY --chown=app:app app ./app
 USER app
-RUN python -c "import app.main, cv2, torch; assert torch.version.cuda is None; from ultralytics import YOLO; YOLO('/app/models/yolo11n.pt')"
+COPY --chown=app:app scripts/verify-headless-runtime.py ./scripts/verify-headless-runtime.py
+RUN --network=none python scripts/verify-headless-runtime.py --model /app/models/yolo11n.pt
 EXPOSE 8000
 # HEALTHCHECK
 #   - /health 가 200 을 돌려주면 healthy.

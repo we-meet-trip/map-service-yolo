@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, ValidationError
 class PermitError(Exception):
     def __init__(self, status: int, code: str | None = None):
         self.status = status
-        self.code = code if status == 403 and code in ("AGE_RESTRICTED", "SERVICE_POLICY_REQUIRED") else None
+        self.code = code if status == 403 and code in ("AGE_INFORMATION_REQUIRED", "AGE_RESTRICTED", "SERVICE_POLICY_REQUIRED") else None
         super().__init__("vision permit denied")
 
 

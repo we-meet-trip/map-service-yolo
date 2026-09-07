@@ -51,7 +51,7 @@ def test_account_quota_survives_reconnection(gemini):
     asyncio.run(vision_ws(second))
     assert gemini.calls == 1
     assert second.responses()[-1]["status"] == "failed" and second.close_code == 4429
-    assert app.state.vision_permit.calls == [False, True, False, True]
+    assert app.state.vision_permit.calls == [False, True, False, False, True]
 
 
 def test_revoked_login_is_checked_again_before_each_job(gemini):

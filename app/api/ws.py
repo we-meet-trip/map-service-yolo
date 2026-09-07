@@ -32,6 +32,8 @@ def _bearer(websocket: WebSocket) -> str | None:
 
 
 def _permit_message(status: int, code: str | None = None) -> str:
+    if code == "AGE_INFORMATION_REQUIRED":
+        return "생년월일을 입력하고 이용 조건을 먼저 확인해주세요."
     if code == "AGE_RESTRICTED":
         return "MAP은 만 18세 이상만 이용할 수 있어요. 이용 조건을 다시 확인해주세요."
     if code == "SERVICE_POLICY_REQUIRED":
@@ -174,6 +176,11 @@ async def vision_ws(websocket: WebSocket) -> None:
                 response = await asyncio.wait_for(
                     _process(req, websocket.app), timeout=websocket.app.state.job_timeout_seconds,
                 )
+                # Inference can outlive a DOB correction, policy revision or session revocation.
+                # Revalidate before releasing its content without spending a second quota unit.
+                current = await permit.check(token, consume=False)
+                if str(current.user_id) != str(owner.user_id):
+                    raise PermitError(401)
             except PermitError as exc:
                 response = VisionResponse(session_id=req.session_id, request_id=req.request_id,
                                           status="failed", code=exc.code, error=_permit_message(exc.status, exc.code))

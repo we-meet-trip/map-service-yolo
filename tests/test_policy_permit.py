@@ -9,10 +9,12 @@ import pytest
 
 from app.api.permit import PermitClient, PermitError
 from app.api.ws import vision_ws
-from tests.fakes import FakeWebSocket, fake_app, jpeg_frame
+from tests.fakes import FakePermit, FakeWebSocket, fake_app, jpeg_frame
+from app.schemas.vision_schemas import IdentifyResult, VisionResponse
 
 
 @pytest.mark.parametrize("body,code", [
+    ({"code": "AGE_INFORMATION_REQUIRED"}, "AGE_INFORMATION_REQUIRED"),
     ({"code": "AGE_RESTRICTED", "message": "private upstream detail"}, "AGE_RESTRICTED"),
     ({"code": "SERVICE_POLICY_REQUIRED"}, "SERVICE_POLICY_REQUIRED"),
     ({"code": "untrusted detail", "message": "private upstream detail"}, None),
@@ -65,7 +67,7 @@ def test_transport_failure_has_fixed_safe_status_and_message():
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("code", ["AGE_RESTRICTED", "SERVICE_POLICY_REQUIRED"])
+@pytest.mark.parametrize("code", ["AGE_INFORMATION_REQUIRED", "AGE_RESTRICTED", "SERVICE_POLICY_REQUIRED"])
 @pytest.mark.parametrize("image", [False, True])
 def test_existing_socket_policy_revocation_blocks_inference(monkeypatch, code, image):
     app = fake_app()
@@ -85,7 +87,7 @@ def test_existing_socket_policy_revocation_blocks_inference(monkeypatch, code, i
     app.state.vision_runtime.close()
 
 
-@pytest.mark.parametrize("code", ["AGE_RESTRICTED", "SERVICE_POLICY_REQUIRED"])
+@pytest.mark.parametrize("code", ["AGE_INFORMATION_REQUIRED", "AGE_RESTRICTED", "SERVICE_POLICY_REQUIRED"])
 def test_policy_denied_handshake_never_accepts_or_reads_a_frame(monkeypatch, code):
     app = fake_app()
     app.state.vision_permit.check = AsyncMock(side_effect=PermitError(403, code))
@@ -97,3 +99,122 @@ def test_policy_denied_handshake_never_accepts_or_reads_a_frame(monkeypatch, cod
     assert socket._incoming == ["must remain unread"]
     process.assert_not_awaited()
     app.state.vision_runtime.close()
+
+
+def _protected_result(req):
+    return VisionResponse(session_id=req.session_id, request_id=req.request_id, status="done",
+                          identify_result=IdentifyResult(name="SYNTHETIC_PROTECTED_RESULT", category="other",
+                              description="SYNTHETIC_PROTECTED_RESULT", search_query="synthetic"))
+
+
+@pytest.mark.parametrize("status,code,close", [
+    (403, "AGE_INFORMATION_REQUIRED", 4403),
+    (403, "AGE_RESTRICTED", 4403),
+    (403, "SERVICE_POLICY_REQUIRED", 4403),
+    (401, None, 4401),
+    (503, None, 1013),
+])
+@pytest.mark.parametrize("image", [False, True])
+def test_policy_change_while_inference_is_pending_withholds_result(monkeypatch, status, code, close, image):
+    async def scenario():
+        started, release = asyncio.Event(), asyncio.Event()
+        app = fake_app()
+        permit = FakePermit(limit=1)
+        app.state.vision_permit = permit
+        original_check = permit.check
+        changed = False
+
+        async def check(token, *, consume):
+            result = await original_check(token, consume=consume)
+            if changed:
+                raise PermitError(status, code)
+            return result
+
+        async def process(req, _):
+            started.set()
+            await release.wait()
+            return _protected_result(req)
+
+        permit.check = check
+        process_mock = AsyncMock(side_effect=process)
+        monkeypatch.setattr("app.api.ws._process", process_mock)
+        socket = FakeWebSocket(app, [json.dumps({"session_id": "synthetic-pending", "request_id": "r1",
+            "frame_b64": jpeg_frame() if image else "", "voice_triggered": image, "voice_text": "synthetic"})])
+        running = asyncio.create_task(vision_ws(socket))
+        try:
+            await asyncio.wait_for(started.wait(), 1)
+            changed = True
+            release.set()
+            await asyncio.wait_for(running, 1)
+            assert socket.accepted and socket.close_code == close
+            assert len(socket.sent) == 1 and "SYNTHETIC_PROTECTED_RESULT" not in socket.sent[0]
+            reply = socket.responses()[0]
+            assert reply["status"] == "failed" and reply["code"] == code
+            assert reply["request_id"] == "r1" and reply["identify_result"] is None
+            assert reply["search_results"] == []
+            assert permit.calls == [False, True, False] and permit.used == 1
+            process_mock.assert_awaited_once()
+            # A denied response must release the runtime slot too.
+            app.state.vision_runtime.reserve(image=image)
+            app.state.vision_runtime.release(image=image)
+        finally:
+            release.set()
+            if not running.done():
+                running.cancel()
+                await asyncio.gather(running, return_exceptions=True)
+            app.state.vision_runtime.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("last_owner", [1, "1", 2])
+def test_result_owner_must_match_original_authenticated_socket(monkeypatch, last_owner):
+    app = fake_app()
+    app.state.vision_permit.check = AsyncMock(side_effect=[SimpleNamespace(user_id=1),
+        SimpleNamespace(user_id=1), SimpleNamespace(user_id=last_owner)])
+    monkeypatch.setattr("app.api.ws._process", AsyncMock(side_effect=lambda req, _: _protected_result(req)))
+    socket = FakeWebSocket(app, [json.dumps({"session_id": "synthetic-owner", "voice_text": "synthetic"})])
+    asyncio.run(vision_ws(socket))
+    assert [call.kwargs["consume"] for call in app.state.vision_permit.check.await_args_list] == [False, True, False]
+    if str(last_owner) == "1":
+        assert socket.responses()[0]["status"] == "done" and not socket.closed
+        assert "SYNTHETIC_PROTECTED_RESULT" in socket.sent[0]
+    else:
+        assert socket.responses()[0]["status"] == "failed" and socket.close_code == 4401
+        assert "SYNTHETIC_PROTECTED_RESULT" not in socket.sent[0]
+    app.state.vision_runtime.close()
+
+
+@pytest.mark.parametrize("post_status,code,close", [
+    (200, None, None), (403, "AGE_INFORMATION_REQUIRED", 4403),
+    (503, "SERVICE_POLICY_UNAVAILABLE", 1013),
+])
+def test_post_result_permit_uses_real_client_consume_false_wire_contract(monkeypatch, post_status, code, close):
+    async def scenario():
+        calls = []
+        def transport(request):
+            calls.append(json.loads(request.content)["consume"])
+            if len(calls) == 3 and post_status != 200:
+                return httpx.Response(post_status, json={"code": code, "message": "private upstream detail"})
+            return httpx.Response(200, json={"user_id": 1, "remaining": 0,
+                "reset_at": "2026-09-08T00:00:00Z"})
+        app = fake_app()
+        client = PermitClient("http://user.invalid", "internal-test", 1, transport=httpx.MockTransport(transport))
+        app.state.vision_permit = client
+        monkeypatch.setattr("app.api.ws._process", AsyncMock(side_effect=lambda req, _: _protected_result(req)))
+        socket = FakeWebSocket(app, [json.dumps({"session_id": "synthetic-wire", "voice_text": "synthetic"})])
+        try:
+            await vision_ws(socket)
+            assert calls == [False, True, False]
+            assert socket.close_code == close
+            assert "private upstream detail" not in socket.sent[0]
+            if post_status == 200:
+                assert socket.responses()[0]["status"] == "done"
+                assert "SYNTHETIC_PROTECTED_RESULT" in socket.sent[0]
+            else:
+                assert socket.responses()[0]["status"] == "failed"
+                assert socket.responses()[0]["code"] == (code if post_status == 403 else None)
+                assert "SYNTHETIC_PROTECTED_RESULT" not in socket.sent[0]
+        finally:
+            await client.aclose()
+            app.state.vision_runtime.close()
+    asyncio.run(scenario())

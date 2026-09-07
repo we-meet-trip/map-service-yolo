@@ -31,12 +31,20 @@ def _bearer(websocket: WebSocket) -> str | None:
     return token if len(token) <= 8192 and _TOKEN.fullmatch(token) else None
 
 
-def _permit_message(status: int) -> str:
+def _permit_message(status: int, code: str | None = None) -> str:
+    if code == "AGE_RESTRICTED":
+        return "MAP은 만 18세 이상만 이용할 수 있어요. 이용 조건을 다시 확인해주세요."
+    if code == "SERVICE_POLICY_REQUIRED":
+        return "이용약관과 만 18세 이상 여부를 먼저 확인해주세요."
     if status in (401, 403):
         return "로그인을 다시 확인해주세요."
     if status == 429:
         return "오늘 사용할 수 있는 인식 횟수를 모두 사용했어요."
     return "인식 서비스를 사용할 수 없어요. 잠시 후 다시 시도해주세요."
+
+
+def _permit_close_code(status: int) -> int:
+    return {401: 4401, 403: 4403, 429: 4429}.get(status, 1013)
 
 
 async def _text_reply(req: VisionRequest) -> VisionResponse:
@@ -109,7 +117,9 @@ async def vision_ws(websocket: WebSocket) -> None:
     try:
         owner = await permit.check(token, consume=False)
     except PermitError as exc:
-        await websocket.close(code=4401 if exc.status in (401, 403) else 1013)
+        # Keep a rejected handshake unaccepted. Browsers hide its HTTP body;
+        # the app rechecks /consents once after a handshake failure.
+        await websocket.close(code=_permit_close_code(exc.status))
         return
     await websocket.accept(subprotocol=_PROTOCOL)
     settings = get_settings()
@@ -166,8 +176,8 @@ async def vision_ws(websocket: WebSocket) -> None:
                 )
             except PermitError as exc:
                 response = VisionResponse(session_id=req.session_id, request_id=req.request_id,
-                                          status="failed", error=_permit_message(exc.status))
-                close_code = 4401 if exc.status in (401, 403) else 4429 if exc.status == 429 else 1013
+                                          status="failed", code=exc.code, error=_permit_message(exc.status, exc.code))
+                close_code = _permit_close_code(exc.status)
             except asyncio.TimeoutError:
                 response = VisionResponse(session_id=req.session_id, request_id=req.request_id,
                                           status="failed", error="인식 시간이 초과됐어요. 다시 시도해주세요.")

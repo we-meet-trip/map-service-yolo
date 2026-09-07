@@ -6,8 +6,9 @@ from pydantic import BaseModel, Field, ValidationError
 
 
 class PermitError(Exception):
-    def __init__(self, status: int):
+    def __init__(self, status: int, code: str | None = None):
         self.status = status
+        self.code = code if status == 403 and code in ("AGE_RESTRICTED", "SERVICE_POLICY_REQUIRED") else None
         super().__init__("vision permit denied")
 
 
@@ -34,7 +35,16 @@ class PermitClient:
                 json={"consume": consume},
             )
             if response.status_code != 200:
-                raise PermitError(response.status_code if response.status_code in {401, 403, 429} else 503)
+                code = None
+                if response.status_code == 403:
+                    try:
+                        body = response.json()
+                        candidate = body.get("code") if isinstance(body, dict) else None
+                        if isinstance(candidate, str):
+                            code = candidate
+                    except ValueError:
+                        pass
+                raise PermitError(response.status_code if response.status_code in {401, 403, 429} else 503, code)
             permit = Permit.model_validate(response.json())
             if not str(permit.user_id).strip() or permit.reset_at.tzinfo is None:
                 raise ValueError("invalid permit")

@@ -109,6 +109,7 @@ class VisionResponse(BaseModel):
     identify_result: Optional[IdentifyResult] = None
     search_results: List[SearchResult] = Field(default_factory=list)
     status: Literal["done", "failed"] = "done"
+    code: Optional[Literal["AGE_RESTRICTED", "SERVICE_POLICY_REQUIRED"]] = None
     error: Optional[str] = None
 
 

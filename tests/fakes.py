@@ -94,14 +94,14 @@ class FakePermit:
         self.limit = limit
         self.calls = []
 
-    async def check(self, token, *, consume):
+    async def check(self, token, *, consume, expected_revision=None):
         from app.api.permit import PermitError
         self.calls.append(consume)
         if consume:
             if self.used >= self.limit:
                 raise PermitError(429)
             self.used += 1
-        return SimpleNamespace(user_id=1, remaining=self.limit-self.used)
+        return SimpleNamespace(user_id=1, remaining=self.limit-self.used, consent_revision=1, include_location=False)
 
 
 def jpeg_frame():

@@ -19,7 +19,7 @@ websockets>=15.0,<17.0
 
 # ultralytics
 #   - app/vision/detector.py YOLO 추론.
-ultralytics>=8.0.0,<9.0.0
+ultralytics-opencv-headless==8.4.142
 
 # opencv-python-headless
 #   - app/vision/detector.py 프레임 디코딩/전처리.

@@ -31,12 +31,24 @@ def _bearer(websocket: WebSocket) -> str | None:
     return token if len(token) <= 8192 and _TOKEN.fullmatch(token) else None
 
 
-def _permit_message(status: int) -> str:
+def _permit_message(status: int, code: str | None = None) -> str:
+    if code in ("AI_CONSENT_REQUIRED", "AI_CONSENT_CHANGED"):
+        return "외부 AI 전송 동의를 확인하고 새 요청을 시작해주세요."
+    if code == "AGE_INFORMATION_REQUIRED":
+        return "생년월일을 입력하고 이용 조건을 먼저 확인해주세요."
+    if code == "AGE_RESTRICTED":
+        return "MAP은 만 18세 이상만 이용할 수 있어요. 이용 조건을 다시 확인해주세요."
+    if code == "SERVICE_POLICY_REQUIRED":
+        return "이용약관과 만 18세 이상 여부를 먼저 확인해주세요."
     if status in (401, 403):
         return "로그인을 다시 확인해주세요."
     if status == 429:
         return "오늘 사용할 수 있는 인식 횟수를 모두 사용했어요."
     return "인식 서비스를 사용할 수 없어요. 잠시 후 다시 시도해주세요."
+
+
+def _permit_close_code(status: int) -> int:
+    return {401: 4401, 403: 4403, 429: 4429}.get(status, 1013)
 
 
 async def _text_reply(req: VisionRequest) -> VisionResponse:
@@ -109,7 +121,9 @@ async def vision_ws(websocket: WebSocket) -> None:
     try:
         owner = await permit.check(token, consume=False)
     except PermitError as exc:
-        await websocket.close(code=4401 if exc.status in (401, 403) else 1013)
+        # Keep a rejected handshake unaccepted. Browsers hide its HTTP body;
+        # the app rechecks /consents once after a handshake failure.
+        await websocket.close(code=_permit_close_code(exc.status))
         return
     await websocket.accept(subprotocol=_PROTOCOL)
     settings = get_settings()
@@ -157,17 +171,28 @@ async def vision_ws(websocket: WebSocket) -> None:
             close_code = None
             try:
                 # JWT 만료/탈퇴 및 quota를 매 작업에서 다시 확인한다.
-                current = await permit.check(token, consume=True)
+                current = await permit.check(token, consume=True, expected_revision=owner.consent_revision)
                 if str(current.user_id) != str(owner.user_id):
                     raise PermitError(401)
+                if current.consent_revision != owner.consent_revision:
+                    raise PermitError(403, "AI_CONSENT_CHANGED")
+                if not current.include_location:
+                    req = req.model_copy(update={"location": None})
                 jobs += 1
                 response = await asyncio.wait_for(
                     _process(req, websocket.app), timeout=websocket.app.state.job_timeout_seconds,
                 )
+                # Inference can outlive a DOB correction, policy revision or session revocation.
+                # Revalidate before releasing its content without spending a second quota unit.
+                current = await permit.check(token, consume=False, expected_revision=owner.consent_revision)
+                if str(current.user_id) != str(owner.user_id):
+                    raise PermitError(401)
+                if current.consent_revision != owner.consent_revision:
+                    raise PermitError(403, "AI_CONSENT_CHANGED")
             except PermitError as exc:
                 response = VisionResponse(session_id=req.session_id, request_id=req.request_id,
-                                          status="failed", error=_permit_message(exc.status))
-                close_code = 4401 if exc.status in (401, 403) else 4429 if exc.status == 429 else 1013
+                                          status="failed", code=exc.code, error=_permit_message(exc.status, exc.code))
+                close_code = _permit_close_code(exc.status)
             except asyncio.TimeoutError:
                 response = VisionResponse(session_id=req.session_id, request_id=req.request_id,
                                           status="failed", error="인식 시간이 초과됐어요. 다시 시도해주세요.")

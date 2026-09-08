@@ -32,6 +32,8 @@ def _bearer(websocket: WebSocket) -> str | None:
 
 
 def _permit_message(status: int, code: str | None = None) -> str:
+    if code in ("AI_CONSENT_REQUIRED", "AI_CONSENT_CHANGED"):
+        return "외부 AI 전송 동의를 확인하고 새 요청을 시작해주세요."
     if code == "AGE_INFORMATION_REQUIRED":
         return "생년월일을 입력하고 이용 조건을 먼저 확인해주세요."
     if code == "AGE_RESTRICTED":
@@ -169,18 +171,24 @@ async def vision_ws(websocket: WebSocket) -> None:
             close_code = None
             try:
                 # JWT 만료/탈퇴 및 quota를 매 작업에서 다시 확인한다.
-                current = await permit.check(token, consume=True)
+                current = await permit.check(token, consume=True, expected_revision=owner.consent_revision)
                 if str(current.user_id) != str(owner.user_id):
                     raise PermitError(401)
+                if current.consent_revision != owner.consent_revision:
+                    raise PermitError(403, "AI_CONSENT_CHANGED")
+                if not current.include_location:
+                    req = req.model_copy(update={"location": None})
                 jobs += 1
                 response = await asyncio.wait_for(
                     _process(req, websocket.app), timeout=websocket.app.state.job_timeout_seconds,
                 )
                 # Inference can outlive a DOB correction, policy revision or session revocation.
                 # Revalidate before releasing its content without spending a second quota unit.
-                current = await permit.check(token, consume=False)
+                current = await permit.check(token, consume=False, expected_revision=owner.consent_revision)
                 if str(current.user_id) != str(owner.user_id):
                     raise PermitError(401)
+                if current.consent_revision != owner.consent_revision:
+                    raise PermitError(403, "AI_CONSENT_CHANGED")
             except PermitError as exc:
                 response = VisionResponse(session_id=req.session_id, request_id=req.request_id,
                                           status="failed", code=exc.code, error=_permit_message(exc.status, exc.code))

@@ -56,7 +56,7 @@ def test_account_quota_survives_reconnection(gemini):
 
 def test_revoked_login_is_checked_again_before_each_job(gemini):
     app = fake_app()
-    app.state.vision_permit.check = AsyncMock(side_effect=[SimpleNamespace(user_id=1), PermitError(401)])
+    app.state.vision_permit.check = AsyncMock(side_effect=[SimpleNamespace(user_id=1, consent_revision=1, include_location=False), PermitError(401)])
     socket = FakeWebSocket(app, [message(request_id="request_1")])
     asyncio.run(vision_ws(socket))
     assert socket.accepted and socket.close_code == 4401 and gemini.calls == 0
@@ -174,7 +174,7 @@ def test_permit_client_sends_internal_and_user_auth_without_following_redirects(
     seen = []
     async def handler(request):
         seen.append(request)
-        return httpx.Response(200, json={"user_id": 42, "remaining": 59, "reset_at": "2026-09-07T00:00:00Z"})
+        return httpx.Response(200, json={"user_id": 42, "remaining": 59, "reset_at": "2026-09-07T00:00:00Z", "consent_revision": 1, "include_location": False})
     async def scenario():
         client = PermitClient("http://user:8080", "internal-test", 1, transport=httpx.MockTransport(handler))
         try:

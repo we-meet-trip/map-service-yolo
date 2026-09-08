@@ -14,6 +14,8 @@ from app.schemas.vision_schemas import IdentifyResult, VisionResponse
 
 
 @pytest.mark.parametrize("body,code", [
+    ({"code": "AI_CONSENT_REQUIRED"}, "AI_CONSENT_REQUIRED"),
+    ({"code": "AI_CONSENT_CHANGED"}, "AI_CONSENT_CHANGED"),
     ({"code": "AGE_INFORMATION_REQUIRED"}, "AGE_INFORMATION_REQUIRED"),
     ({"code": "AGE_RESTRICTED", "message": "private upstream detail"}, "AGE_RESTRICTED"),
     ({"code": "SERVICE_POLICY_REQUIRED"}, "SERVICE_POLICY_REQUIRED"),
@@ -71,7 +73,7 @@ def test_transport_failure_has_fixed_safe_status_and_message():
 @pytest.mark.parametrize("image", [False, True])
 def test_existing_socket_policy_revocation_blocks_inference(monkeypatch, code, image):
     app = fake_app()
-    app.state.vision_permit.check = AsyncMock(side_effect=[SimpleNamespace(user_id=1), PermitError(403, code)])
+    app.state.vision_permit.check = AsyncMock(side_effect=[SimpleNamespace(user_id=1, consent_revision=1, include_location=False), PermitError(403, code)])
     process = AsyncMock(side_effect=AssertionError("must not invoke inference"))
     monkeypatch.setattr("app.api.ws._process", process)
     socket = FakeWebSocket(app, [json.dumps({"session_id": "synthetic-request", "request_id": "r1",
@@ -124,8 +126,8 @@ def test_policy_change_while_inference_is_pending_withholds_result(monkeypatch, 
         original_check = permit.check
         changed = False
 
-        async def check(token, *, consume):
-            result = await original_check(token, consume=consume)
+        async def check(token, *, consume, expected_revision=None):
+            result = await original_check(token, consume=consume, expected_revision=expected_revision)
             if changed:
                 raise PermitError(status, code)
             return result
@@ -169,8 +171,8 @@ def test_policy_change_while_inference_is_pending_withholds_result(monkeypatch, 
 @pytest.mark.parametrize("last_owner", [1, "1", 2])
 def test_result_owner_must_match_original_authenticated_socket(monkeypatch, last_owner):
     app = fake_app()
-    app.state.vision_permit.check = AsyncMock(side_effect=[SimpleNamespace(user_id=1),
-        SimpleNamespace(user_id=1), SimpleNamespace(user_id=last_owner)])
+    app.state.vision_permit.check = AsyncMock(side_effect=[SimpleNamespace(user_id=1, consent_revision=1, include_location=False),
+        SimpleNamespace(user_id=1, consent_revision=1, include_location=False), SimpleNamespace(user_id=last_owner, consent_revision=1, include_location=False)])
     monkeypatch.setattr("app.api.ws._process", AsyncMock(side_effect=lambda req, _: _protected_result(req)))
     socket = FakeWebSocket(app, [json.dumps({"session_id": "synthetic-owner", "voice_text": "synthetic"})])
     asyncio.run(vision_ws(socket))
@@ -196,7 +198,7 @@ def test_post_result_permit_uses_real_client_consume_false_wire_contract(monkeyp
             if len(calls) == 3 and post_status != 200:
                 return httpx.Response(post_status, json={"code": code, "message": "private upstream detail"})
             return httpx.Response(200, json={"user_id": 1, "remaining": 0,
-                "reset_at": "2026-09-08T00:00:00Z"})
+                "reset_at": "2026-09-08T00:00:00Z", "consent_revision": 1, "include_location": False})
         app = fake_app()
         client = PermitClient("http://user.invalid", "internal-test", 1, transport=httpx.MockTransport(transport))
         app.state.vision_permit = client
@@ -217,4 +219,52 @@ def test_post_result_permit_uses_real_client_consume_false_wire_contract(monkeyp
         finally:
             await client.aclose()
             app.state.vision_runtime.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("phase", ["before", "after"])
+def test_revoke_then_regrant_never_resumes_original_socket_epoch(monkeypatch, phase):
+    app = fake_app()
+    def permission(revision):
+        return SimpleNamespace(user_id=1, consent_revision=revision, include_location=False)
+    app.state.vision_permit.check = AsyncMock(side_effect=[permission(1), permission(3 if phase == "before" else 1), permission(3)])
+    process = AsyncMock(side_effect=lambda req, _: _protected_result(req))
+    monkeypatch.setattr("app.api.ws._process", process)
+    socket = FakeWebSocket(app, [json.dumps({"session_id": "synthetic-epoch", "voice_text": "synthetic"})])
+    asyncio.run(vision_ws(socket))
+    assert socket.close_code == 4403
+    assert socket.responses()[0]["code"] == "AI_CONSENT_CHANGED"
+    assert "SYNTHETIC_PROTECTED_RESULT" not in socket.sent[0]
+    assert process.await_count == (0 if phase == "before" else 1)
+    app.state.vision_runtime.close()
+
+
+@pytest.mark.parametrize("include_location", [False, True])
+def test_server_location_opt_in_controls_structured_location_before_provider(monkeypatch, include_location):
+    app = fake_app()
+    permission = SimpleNamespace(user_id=1, consent_revision=1, include_location=include_location)
+    app.state.vision_permit.check = AsyncMock(return_value=permission)
+    process = AsyncMock(side_effect=lambda req, _: _protected_result(req))
+    monkeypatch.setattr("app.api.ws._process", process)
+    socket = FakeWebSocket(app, [json.dumps({"session_id": "synthetic-location", "voice_text": "synthetic",
+        "location": {"lat": 37.5, "lng": 127.0}})])
+    asyncio.run(vision_ws(socket))
+    assert (process.await_args.args[0].location is not None) == include_location
+    assert [call.kwargs.get("expected_revision") for call in app.state.vision_permit.check.await_args_list] == [None, 1, 1]
+    app.state.vision_runtime.close()
+
+
+@pytest.mark.parametrize("fields", [{}, {"consent_revision": 0, "include_location": False},
+    {"consent_revision": 1}, {"consent_revision": "1", "include_location": False}])
+def test_legacy_or_malformed_permission_contract_fails_closed(fields):
+    async def scenario():
+        body = {"user_id": 1, "remaining": 0, "reset_at": "2026-09-08T00:00:00Z", **fields}
+        client = PermitClient("http://user.invalid", "internal-test", 1, transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json=body)))
+        try:
+            with pytest.raises(PermitError) as denied:
+                await client.check("a.b.c", consume=False)
+            assert denied.value.status == 503
+        finally:
+            await client.aclose()
     asyncio.run(scenario())

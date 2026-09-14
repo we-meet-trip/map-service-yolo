@@ -45,7 +45,7 @@ class AgentSettings(BaseSettings):
     )
 
     GEMINI_API_KEY: SecretStr = SecretStr("")
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = "gemini-3.8-flash"
     GEMINI_TIMEOUT_SECONDS: float = 25.0
     KAKAO_REST_API_KEY: str = ""
 
